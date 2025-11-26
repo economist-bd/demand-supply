@@ -17,7 +17,15 @@
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getAuth, 
+            createUserWithEmailAndPassword, 
+            signInWithEmailAndPassword, 
+            onAuthStateChanged, 
+            signOut,
+            signInWithCustomToken,
+            signInAnonymously
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
 
@@ -38,11 +46,26 @@
         const db = getFirestore(app);
         const analytics = getAnalytics(app);
         
-        // App ID for data isolation (Critical for Permission Fix)
+        // App ID for data isolation
         const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'chahida-jogan-store';
 
         // Global User State
         let currentUser = null;
+
+        // --- CRITICAL AUTH INIT ---
+        // This ensures permissions are granted correctly in the environment
+        const initAuth = async () => {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                try {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } catch (e) {
+                    console.error("Token auth failed, falling back", e);
+                }
+            } else {
+                // If no user is logged in, we verify state via onAuthStateChanged below
+            }
+        };
+        initAuth();
 
         // Make functions global
         window.registerUser = async (email, password) => {
@@ -79,11 +102,15 @@
         window.placeOrder = async (orderDetails) => {
             if (!currentUser) {
                 showToast("অর্ডার করতে হলে আপনাকে লগইন থাকতে হবে!", true);
+                toggleModal('checkoutModal'); // Close checkout
+                toggleModal('authModal'); // Open login
                 return;
             }
             
+            // If user is anonymous (guest), we can allow order or force login.
+            // Here we allow it to ensure "Missing permissions" doesn't block guests if implemented later.
+            
             try {
-                // Using the specific path structure required for the environment permissions
                 const ordersRef = collection(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'orders');
                 
                 await addDoc(ordersRef, {
@@ -99,11 +126,11 @@
                 window.clearCart(); 
             } catch (error) {
                 console.error("Error placing order: ", error);
-                showToast("অর্ডার করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।", true);
+                showToast("অর্ডার করতে সমস্যা হয়েছে: " + error.message, true);
             }
         };
 
-        // Fetch Orders Function (FIXED: Removed orderBy query)
+        // Fetch Orders Function
         window.fetchOrders = async () => {
             if (!currentUser) return;
             const ordersContainer = document.getElementById('dashboardOrders');
@@ -112,7 +139,7 @@
             try {
                 const ordersRef = collection(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'orders');
                 
-                // Simple fetch without orderBy/where to avoid index/permission errors
+                // Fetch without complex queries to avoid index errors
                 const querySnapshot = await getDocs(ordersRef);
 
                 if (querySnapshot.empty) {
@@ -120,13 +147,12 @@
                     return;
                 }
 
-                // Convert to array and sort in memory (Newest first)
+                // Client-side sorting
                 let orders = [];
                 querySnapshot.forEach((doc) => {
                     orders.push({ id: doc.id, ...doc.data() });
                 });
 
-                // Sort by createdAt (descending) safely
                 orders.sort((a, b) => {
                     const timeA = a.createdAt ? a.createdAt.seconds : 0;
                     const timeB = b.createdAt ? b.createdAt.seconds : 0;
@@ -173,10 +199,11 @@
             const logoutBtn = document.getElementById('navLogoutBtn');
             const userName = document.getElementById('userNameDisplay');
             
-            if (user) {
+            // Only show user info if they are NOT anonymous (i.e. real login)
+            if (user && !user.isAnonymous) {
                 loginBtn.classList.add('hidden');
                 logoutBtn.classList.remove('hidden');
-                userName.innerHTML = `<i class="fas fa-user-circle mr-1"></i> ${user.email.split('@')[0]}`;
+                userName.innerHTML = `<i class="fas fa-user-circle mr-1"></i> ${user.email ? user.email.split('@')[0] : 'User'}`;
                 userName.classList.remove('hidden');
                 userName.onclick = () => {
                     toggleModal('dashboardModal');
@@ -184,6 +211,7 @@
                 };
                 userName.style.cursor = 'pointer';
             } else {
+                // Not logged in or Anonymous
                 loginBtn.classList.remove('hidden');
                 logoutBtn.classList.add('hidden');
                 userName.classList.add('hidden');

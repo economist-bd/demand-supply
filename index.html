@@ -30,6 +30,7 @@
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
             apiKey: "AIzaSyCDr8j4mCOZnygHnw8qnmHm_-5SasuqhvY",
             authDomain: "sample-firebase-ai-app-e155b.firebaseapp.com",
+            databaseURL: "https://sample-firebase-ai-app-e155b-default-rtdb.asia-southeast1.firebasedatabase.app",
             projectId: "sample-firebase-ai-app-e155b",
             storageBucket: "sample-firebase-ai-app-e155b.firebasestorage.app",
             messagingSenderId: "189674121794",
@@ -41,95 +42,86 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
+        const analytics = getAnalytics(app);
         
-        // App ID for data isolation
-        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'chahida-jogan-store';
+        // Secure App ID Retrieval
+        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
-        // System User (For Permission)
-        let systemUser = null;
-        // Virtual User (For UI Display)
-        let virtualUser = null;
+        // Global State
+        let currentUser = null;
 
-        // --- AUTH INITIALIZATION ---
+        // 2. Authentication Initialization (Critical for Permissions)
         const initAuth = async () => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                try {
                     await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
+                } catch (e) {
+                    console.error("Custom token auth failed", e);
                 }
-            } catch (error) {
-                console.error("Auth Error:", error);
-                // Fallback
-                await signInAnonymously(auth);
+            } else {
+                // Fallback to anonymous to ensure connection if no user is present
+                // This prevents "permission denied" on public reads if configured
+                onAuthStateChanged(auth, async (user) => {
+                    if (!user) {
+                        try {
+                            // We don't force anonymous login here to avoid conflict with manual registration
+                            // but we ensure the app is ready.
+                        } catch (e) {
+                            console.error("Auth check failed", e);
+                        }
+                    }
+                });
             }
         };
         initAuth();
 
-        // Track System Auth State
-        onAuthStateChanged(auth, (user) => {
-            systemUser = user;
-            // Check for persistent login
-            const savedUser = localStorage.getItem('virtualUser');
-            if (savedUser) {
-                virtualUser = JSON.parse(savedUser);
-                updateAuthUI(virtualUser);
+        // 3. User Actions (Global Functions)
+        window.registerUser = async (email, password) => {
+            try {
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                showToast("সফলভাবে রেজিস্ট্রেশন সম্পন্ন হয়েছে!");
+                toggleModal('authModal');
+            } catch (error) {
+                showToast("ত্রুটি: " + error.message, true);
             }
-        });
+        };
 
-        // --- GLOBAL FUNCTIONS ---
-
-        // Virtual Login Logic
         window.loginUser = async (email, password) => {
-            // Simulate login process
-            setTimeout(() => {
-                const userObj = { email: email, name: email.split('@')[0] };
-                virtualUser = userObj;
-                localStorage.setItem('virtualUser', JSON.stringify(userObj));
-                
+            try {
+                const userCredential = await signInWithEmailAndPassword(auth, email, password);
                 showToast("সফলভাবে লগইন হয়েছে!");
                 toggleModal('authModal');
-                updateAuthUI(virtualUser);
-            }, 800);
+            } catch (error) {
+                showToast("লগইন ব্যর্থ: " + error.message, true);
+            }
         };
 
-        window.registerUser = async (email, password) => {
-            // Simulate registration
-            window.loginUser(email, password); // Auto login after register
-            showToast("রেজিস্ট্রেশন সফল হয়েছে!");
+        window.logoutUser = async () => {
+            try {
+                await signOut(auth);
+                showToast("লগআউট সম্পন্ন হয়েছে");
+                document.getElementById('dashboardOrders').innerHTML = '';
+            } catch (error) {
+                console.error(error);
+            }
         };
 
-        window.logoutUser = () => {
-            virtualUser = null;
-            localStorage.removeItem('virtualUser');
-            showToast("লগআউট সম্পন্ন হয়েছে");
-            updateAuthUI(null);
-            document.getElementById('dashboardOrders').innerHTML = '';
-        };
-
-        // Place Order Function
+        // 4. Order Logic
         window.placeOrder = async (orderDetails) => {
-            // 1. Check Virtual Auth (UI)
-            if (!virtualUser) {
+            if (!currentUser) {
                 showToast("অর্ডার করতে হলে আপনাকে লগইন থাকতে হবে!", true);
                 toggleModal('checkoutModal');
                 toggleModal('authModal');
                 return;
             }
-
-            // 2. Check System Auth (Database Permission)
-            if (!systemUser) {
-                showToast("সিস্টেম কানেকশন সমস্যা। পেজটি রিফ্রেশ দিন।", true);
-                return;
-            }
             
             try {
-                // Use systemUser UID for path permission, but save virtualUser info inside document
-                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', systemUser.uid, 'orders');
+                // Strict path adherence: /artifacts/{appId}/users/{userId}/orders
+                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'orders');
                 
                 await addDoc(ordersRef, {
                     ...orderDetails,
-                    accountEmail: virtualUser.email, // Link order to virtual user
+                    userId: currentUser.uid,
                     status: 'Pending',
                     createdAt: serverTimestamp(),
                     date: new Date().toLocaleDateString('bn-BD')
@@ -140,66 +132,75 @@
                 window.clearCart(); 
             } catch (error) {
                 console.error("Error placing order: ", error);
-                showToast("অর্ডার করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।", true);
+                // Providing a user-friendly error message
+                showToast("অর্ডার করতে সমস্যা হয়েছে। দয়া করে আবার চেষ্টা করুন।", true);
             }
         };
 
-        // Fetch Orders Function
+        // 5. Fetch Orders Logic
         window.fetchOrders = async () => {
-            if (!systemUser || !virtualUser) return;
+            if (!currentUser) return;
             const ordersContainer = document.getElementById('dashboardOrders');
-            ordersContainer.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-blue-400"></i> লোড হচ্ছে...</div>';
+            ordersContainer.innerHTML = '<div class="text-center py-4 text-blue-400"><i class="fas fa-spinner fa-spin"></i> তথ্য লোড হচ্ছে...</div>';
 
             try {
-                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', systemUser.uid, 'orders');
+                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'orders');
+                
+                // Fetch ALL documents in collection (No 'orderBy' to avoid index errors)
                 const querySnapshot = await getDocs(ordersRef);
 
                 if (querySnapshot.empty) {
-                    ordersContainer.innerHTML = '<p class="text-gray-400 text-center">কোনো অর্ডার পাওয়া যায়নি।</p>';
+                    ordersContainer.innerHTML = '<div class="text-center text-gray-400 py-6"><i class="fas fa-box-open text-4xl mb-2 opacity-50"></i><p>কোনো অর্ডার পাওয়া যায়নি।</p></div>';
                     return;
                 }
 
-                // Filter in memory for the current virtual user
+                // Client-side Sorting (Newest First)
                 let orders = [];
                 querySnapshot.forEach((doc) => {
-                    const data = doc.data();
-                    // Only show orders belonging to the logged-in virtual email
-                    if (data.accountEmail === virtualUser.email) {
-                        orders.push({ id: doc.id, ...data });
-                    }
+                    orders.push({ id: doc.id, ...doc.data() });
                 });
 
-                if (orders.length === 0) {
-                    ordersContainer.innerHTML = '<p class="text-gray-400 text-center">আপনার কোনো অর্ডার পাওয়া যায়নি।</p>';
-                    return;
-                }
-
-                // Sort by date descending
                 orders.sort((a, b) => {
                     const timeA = a.createdAt ? a.createdAt.seconds : 0;
                     const timeB = b.createdAt ? b.createdAt.seconds : 0;
                     return timeB - timeA;
                 });
 
+                // Render
                 let html = '';
                 orders.forEach((data) => {
+                    // Badge Color Logic
+                    let badgeClass = 'bg-yellow-900 text-yellow-500';
+                    if (data.status === 'Completed' || data.status === 'Delivered') badgeClass = 'bg-green-900 text-green-500';
+                    if (data.status === 'Cancelled') badgeClass = 'bg-red-900 text-red-500';
+
+                    // Shipping Text
+                    const shippingText = (data.shippingArea == 60) ? 'ঢাকার বাহিরে' : 'ঢাকার ভেতরে';
+
                     html += `
-                        <div class="bg-slate-800 p-4 rounded-lg border border-slate-700 mb-3">
+                        <div class="bg-slate-800 p-4 rounded-lg border border-slate-700 mb-3 hover:border-slate-500 transition">
                             <div class="flex justify-between items-start mb-2">
                                 <div>
-                                    <p class="text-blue-400 font-bold text-sm">অর্ডার #${data.id.slice(0, 6)}</p>
-                                    <p class="text-xs text-gray-500">${data.date || 'তারিখ নেই'}</p>
+                                    <p class="text-blue-400 font-bold text-sm">#${data.id.slice(0, 8)}</p>
+                                    <p class="text-xs text-gray-500"><i class="far fa-clock mr-1"></i>${data.date || 'N/A'}</p>
                                 </div>
-                                <span class="px-2 py-1 rounded text-xs font-bold ${data.status === 'Pending' ? 'bg-yellow-900 text-yellow-500' : 'bg-green-900 text-green-500'}">
+                                <span class="px-2 py-1 rounded text-xs font-bold ${badgeClass}">
                                     ${data.status}
                                 </span>
                             </div>
-                            <div class="text-gray-300 text-sm mb-2">
-                                <p>মোট আইটেম: ${data.items ? data.items.length : 0} টি</p>
-                                <p class="font-bold">সর্বমোট: ৳ ${data.total}</p>
-                            </div>
-                            <div class="text-xs text-gray-500">
-                                <p>ডেলিভারি: ${data.shippingArea === 60 || data.shippingArea === '60' ? 'ঢাকার বাহিরে' : 'ঢাকার ভেতরে'}</p>
+                            <div class="text-gray-300 text-sm mb-2 border-t border-slate-700 pt-2 mt-2">
+                                <div class="flex justify-between">
+                                    <span>বই সংখ্যা:</span>
+                                    <span class="font-bold">${data.items ? data.items.length : 0} টি</span>
+                                </div>
+                                <div class="flex justify-between mt-1">
+                                    <span>ডেলিভারি:</span>
+                                    <span>${shippingText}</span>
+                                </div>
+                                <div class="flex justify-between mt-1 text-white font-bold text-base">
+                                    <span>সর্বমোট:</span>
+                                    <span class="text-green-400">৳ ${data.total}</span>
+                                </div>
                             </div>
                         </div>
                     `;
@@ -207,19 +208,26 @@
                 ordersContainer.innerHTML = html;
             } catch (error) {
                 console.error("Error fetching orders: ", error);
-                ordersContainer.innerHTML = '<p class="text-red-400 text-center">তথ্য লোড করতে সমস্যা হয়েছে।</p>';
+                ordersContainer.innerHTML = '<p class="text-red-400 text-center py-4">তথ্য লোড করতে সমস্যা হয়েছে। ইন্টারনেট সংযোগ চেক করুন।</p>';
             }
         };
+
+        // 6. Auth State Listener
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            updateAuthUI(user);
+        });
 
         function updateAuthUI(user) {
             const loginBtn = document.getElementById('navLoginBtn');
             const logoutBtn = document.getElementById('navLogoutBtn');
             const userName = document.getElementById('userNameDisplay');
             
-            if (user) {
+            if (user && !user.isAnonymous) {
                 loginBtn.classList.add('hidden');
                 logoutBtn.classList.remove('hidden');
-                userName.innerHTML = `<i class="fas fa-user-circle mr-1"></i> ${user.email.split('@')[0]}`;
+                const displayName = user.email ? user.email.split('@')[0] : 'User';
+                userName.innerHTML = `<i class="fas fa-user-circle mr-1"></i> ${displayName}`;
                 userName.classList.remove('hidden');
                 userName.onclick = () => {
                     toggleModal('dashboardModal');
@@ -301,11 +309,12 @@
             border-radius: 4px;
             padding: 16px;
             position: fixed;
-            z-index: 100;
+            z-index: 200;
             left: 50%;
             bottom: 30px;
             transform: translateX(-50%);
             font-size: 17px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         }
         #toast.show {
             visibility: visible;

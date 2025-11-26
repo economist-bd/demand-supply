@@ -19,10 +19,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { 
             getAuth, 
-            createUserWithEmailAndPassword, 
-            signInWithEmailAndPassword, 
             onAuthStateChanged, 
-            signOut,
             signInWithCustomToken,
             signInAnonymously
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
@@ -44,78 +41,95 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        const analytics = getAnalytics(app);
         
         // App ID for data isolation
         const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'chahida-jogan-store';
 
-        // Global User State
-        let currentUser = null;
+        // System User (For Permission)
+        let systemUser = null;
+        // Virtual User (For UI Display)
+        let virtualUser = null;
 
-        // --- CRITICAL AUTH INIT ---
-        // This ensures permissions are granted correctly in the environment
+        // --- AUTH INITIALIZATION ---
         const initAuth = async () => {
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                try {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
-                } catch (e) {
-                    console.error("Token auth failed, falling back", e);
+                } else {
+                    await signInAnonymously(auth);
                 }
-            } else {
-                // If no user is logged in, we verify state via onAuthStateChanged below
+            } catch (error) {
+                console.error("Auth Error:", error);
+                // Fallback
+                await signInAnonymously(auth);
             }
         };
         initAuth();
 
-        // Make functions global
-        window.registerUser = async (email, password) => {
-            try {
-                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-                showToast("সফলভাবে রেজিস্ট্রেশন সম্পন্ন হয়েছে!");
-                toggleModal('authModal');
-            } catch (error) {
-                showToast("ত্রুটি: " + error.message, true);
+        // Track System Auth State
+        onAuthStateChanged(auth, (user) => {
+            systemUser = user;
+            // Check for persistent login
+            const savedUser = localStorage.getItem('virtualUser');
+            if (savedUser) {
+                virtualUser = JSON.parse(savedUser);
+                updateAuthUI(virtualUser);
             }
-        };
+        });
 
+        // --- GLOBAL FUNCTIONS ---
+
+        // Virtual Login Logic
         window.loginUser = async (email, password) => {
-            try {
-                const userCredential = await signInWithEmailAndPassword(auth, email, password);
+            // Simulate login process
+            setTimeout(() => {
+                const userObj = { email: email, name: email.split('@')[0] };
+                virtualUser = userObj;
+                localStorage.setItem('virtualUser', JSON.stringify(userObj));
+                
                 showToast("সফলভাবে লগইন হয়েছে!");
                 toggleModal('authModal');
-            } catch (error) {
-                showToast("লগইন ব্যর্থ: " + error.message, true);
-            }
+                updateAuthUI(virtualUser);
+            }, 800);
         };
 
-        window.logoutUser = async () => {
-            try {
-                await signOut(auth);
-                showToast("লগআউট সম্পন্ন হয়েছে");
-                document.getElementById('dashboardOrders').innerHTML = '';
-            } catch (error) {
-                console.error(error);
-            }
+        window.registerUser = async (email, password) => {
+            // Simulate registration
+            window.loginUser(email, password); // Auto login after register
+            showToast("রেজিস্ট্রেশন সফল হয়েছে!");
+        };
+
+        window.logoutUser = () => {
+            virtualUser = null;
+            localStorage.removeItem('virtualUser');
+            showToast("লগআউট সম্পন্ন হয়েছে");
+            updateAuthUI(null);
+            document.getElementById('dashboardOrders').innerHTML = '';
         };
 
         // Place Order Function
         window.placeOrder = async (orderDetails) => {
-            if (!currentUser) {
+            // 1. Check Virtual Auth (UI)
+            if (!virtualUser) {
                 showToast("অর্ডার করতে হলে আপনাকে লগইন থাকতে হবে!", true);
-                toggleModal('checkoutModal'); // Close checkout
-                toggleModal('authModal'); // Open login
+                toggleModal('checkoutModal');
+                toggleModal('authModal');
+                return;
+            }
+
+            // 2. Check System Auth (Database Permission)
+            if (!systemUser) {
+                showToast("সিস্টেম কানেকশন সমস্যা। পেজটি রিফ্রেশ দিন।", true);
                 return;
             }
             
-            // If user is anonymous (guest), we can allow order or force login.
-            // Here we allow it to ensure "Missing permissions" doesn't block guests if implemented later.
-            
             try {
-                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'orders');
+                // Use systemUser UID for path permission, but save virtualUser info inside document
+                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', systemUser.uid, 'orders');
                 
                 await addDoc(ordersRef, {
                     ...orderDetails,
-                    userId: currentUser.uid,
+                    accountEmail: virtualUser.email, // Link order to virtual user
                     status: 'Pending',
                     createdAt: serverTimestamp(),
                     date: new Date().toLocaleDateString('bn-BD')
@@ -126,20 +140,18 @@
                 window.clearCart(); 
             } catch (error) {
                 console.error("Error placing order: ", error);
-                showToast("অর্ডার করতে সমস্যা হয়েছে: " + error.message, true);
+                showToast("অর্ডার করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।", true);
             }
         };
 
         // Fetch Orders Function
         window.fetchOrders = async () => {
-            if (!currentUser) return;
+            if (!systemUser || !virtualUser) return;
             const ordersContainer = document.getElementById('dashboardOrders');
             ordersContainer.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-blue-400"></i> লোড হচ্ছে...</div>';
 
             try {
-                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'orders');
-                
-                // Fetch without complex queries to avoid index errors
+                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', systemUser.uid, 'orders');
                 const querySnapshot = await getDocs(ordersRef);
 
                 if (querySnapshot.empty) {
@@ -147,12 +159,22 @@
                     return;
                 }
 
-                // Client-side sorting
+                // Filter in memory for the current virtual user
                 let orders = [];
                 querySnapshot.forEach((doc) => {
-                    orders.push({ id: doc.id, ...doc.data() });
+                    const data = doc.data();
+                    // Only show orders belonging to the logged-in virtual email
+                    if (data.accountEmail === virtualUser.email) {
+                        orders.push({ id: doc.id, ...data });
+                    }
                 });
 
+                if (orders.length === 0) {
+                    ordersContainer.innerHTML = '<p class="text-gray-400 text-center">আপনার কোনো অর্ডার পাওয়া যায়নি।</p>';
+                    return;
+                }
+
+                // Sort by date descending
                 orders.sort((a, b) => {
                     const timeA = a.createdAt ? a.createdAt.seconds : 0;
                     const timeB = b.createdAt ? b.createdAt.seconds : 0;
@@ -189,21 +211,15 @@
             }
         };
 
-        onAuthStateChanged(auth, (user) => {
-            currentUser = user;
-            updateAuthUI(user);
-        });
-
         function updateAuthUI(user) {
             const loginBtn = document.getElementById('navLoginBtn');
             const logoutBtn = document.getElementById('navLogoutBtn');
             const userName = document.getElementById('userNameDisplay');
             
-            // Only show user info if they are NOT anonymous (i.e. real login)
-            if (user && !user.isAnonymous) {
+            if (user) {
                 loginBtn.classList.add('hidden');
                 logoutBtn.classList.remove('hidden');
-                userName.innerHTML = `<i class="fas fa-user-circle mr-1"></i> ${user.email ? user.email.split('@')[0] : 'User'}`;
+                userName.innerHTML = `<i class="fas fa-user-circle mr-1"></i> ${user.email.split('@')[0]}`;
                 userName.classList.remove('hidden');
                 userName.onclick = () => {
                     toggleModal('dashboardModal');
@@ -211,7 +227,6 @@
                 };
                 userName.style.cursor = 'pointer';
             } else {
-                // Not logged in or Anonymous
                 loginBtn.classList.remove('hidden');
                 logoutBtn.classList.add('hidden');
                 userName.classList.add('hidden');

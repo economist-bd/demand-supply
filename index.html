@@ -18,10 +18,11 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, getDocs, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
 
-        const firebaseConfig = {
+        // Use environment config if available, otherwise use default
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
             apiKey: "AIzaSyCDr8j4mCOZnygHnw8qnmHm_-5SasuqhvY",
             authDomain: "sample-firebase-ai-app-e155b.firebaseapp.com",
             projectId: "sample-firebase-ai-app-e155b",
@@ -37,8 +38,8 @@
         const db = getFirestore(app);
         const analytics = getAnalytics(app);
         
-        // App ID for data isolation
-        const APP_ID = 'chahida-jogan-store';
+        // App ID for data isolation (Critical for Permission Fix)
+        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'chahida-jogan-store';
 
         // Global User State
         let currentUser = null;
@@ -68,7 +69,6 @@
             try {
                 await signOut(auth);
                 showToast("লগআউট সম্পন্ন হয়েছে");
-                // Clear Dashboard View
                 document.getElementById('dashboardOrders').innerHTML = '';
             } catch (error) {
                 console.error(error);
@@ -77,9 +77,13 @@
 
         // Place Order Function
         window.placeOrder = async (orderDetails) => {
-            if (!currentUser) return;
+            if (!currentUser) {
+                showToast("অর্ডার করতে হলে আপনাকে লগইন থাকতে হবে!", true);
+                return;
+            }
+            
             try {
-                // Using the specific path structure required for the environment/app
+                // Using the specific path structure required for the environment permissions
                 const ordersRef = collection(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'orders');
                 
                 await addDoc(ordersRef, {
@@ -92,14 +96,14 @@
 
                 showToast("অর্ডার সফলভাবে সম্পন্ন হয়েছে!");
                 toggleModal('checkoutModal');
-                window.clearCart(); // Clear local cart
+                window.clearCart(); 
             } catch (error) {
                 console.error("Error placing order: ", error);
-                showToast("অর্ডার করতে সমস্যা হয়েছে: " + error.message, true);
+                showToast("অর্ডার করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।", true);
             }
         };
 
-        // Fetch Orders Function
+        // Fetch Orders Function (FIXED: Removed orderBy query)
         window.fetchOrders = async () => {
             if (!currentUser) return;
             const ordersContainer = document.getElementById('dashboardOrders');
@@ -107,22 +111,35 @@
 
             try {
                 const ordersRef = collection(db, 'artifacts', APP_ID, 'users', currentUser.uid, 'orders');
-                const q = query(ordersRef, orderBy('createdAt', 'desc'));
-                const querySnapshot = await getDocs(q);
+                
+                // Simple fetch without orderBy/where to avoid index/permission errors
+                const querySnapshot = await getDocs(ordersRef);
 
                 if (querySnapshot.empty) {
                     ordersContainer.innerHTML = '<p class="text-gray-400 text-center">কোনো অর্ডার পাওয়া যায়নি।</p>';
                     return;
                 }
 
-                let html = '';
+                // Convert to array and sort in memory (Newest first)
+                let orders = [];
                 querySnapshot.forEach((doc) => {
-                    const data = doc.data();
+                    orders.push({ id: doc.id, ...doc.data() });
+                });
+
+                // Sort by createdAt (descending) safely
+                orders.sort((a, b) => {
+                    const timeA = a.createdAt ? a.createdAt.seconds : 0;
+                    const timeB = b.createdAt ? b.createdAt.seconds : 0;
+                    return timeB - timeA;
+                });
+
+                let html = '';
+                orders.forEach((data) => {
                     html += `
                         <div class="bg-slate-800 p-4 rounded-lg border border-slate-700 mb-3">
                             <div class="flex justify-between items-start mb-2">
                                 <div>
-                                    <p class="text-blue-400 font-bold text-sm">অর্ডার #${doc.id.slice(0, 6)}</p>
+                                    <p class="text-blue-400 font-bold text-sm">অর্ডার #${data.id.slice(0, 6)}</p>
                                     <p class="text-xs text-gray-500">${data.date || 'তারিখ নেই'}</p>
                                 </div>
                                 <span class="px-2 py-1 rounded text-xs font-bold ${data.status === 'Pending' ? 'bg-yellow-900 text-yellow-500' : 'bg-green-900 text-green-500'}">
@@ -130,11 +147,11 @@
                                 </span>
                             </div>
                             <div class="text-gray-300 text-sm mb-2">
-                                <p>মোট আইটেম: ${data.items.length} টি</p>
+                                <p>মোট আইটেম: ${data.items ? data.items.length : 0} টি</p>
                                 <p class="font-bold">সর্বমোট: ৳ ${data.total}</p>
                             </div>
                             <div class="text-xs text-gray-500">
-                                <p>ডেলিভারি: ${data.shippingArea === '60' ? 'ঢাকার বাহিরে' : 'ঢাকার ভেতরে'}</p>
+                                <p>ডেলিভারি: ${data.shippingArea === 60 || data.shippingArea === '60' ? 'ঢাকার বাহিরে' : 'ঢাকার ভেতরে'}</p>
                             </div>
                         </div>
                     `;
@@ -161,7 +178,6 @@
                 logoutBtn.classList.remove('hidden');
                 userName.innerHTML = `<i class="fas fa-user-circle mr-1"></i> ${user.email.split('@')[0]}`;
                 userName.classList.remove('hidden');
-                // Make username clickable to open dashboard
                 userName.onclick = () => {
                     toggleModal('dashboardModal');
                     window.fetchOrders();

@@ -19,23 +19,23 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { 
             getAuth, 
+            createUserWithEmailAndPassword, 
+            signInWithEmailAndPassword, 
             onAuthStateChanged, 
-            signInWithCustomToken,
-            signInAnonymously
+            signOut 
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, getDocs, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
 
-        // Firebase Configuration
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            apiKey: "AIzaSyCDr8j4mCOZnygHnw8qnmHm_-5SasuqhvY",
-            authDomain: "sample-firebase-ai-app-e155b.firebaseapp.com",
-            databaseURL: "https://sample-firebase-ai-app-e155b-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "sample-firebase-ai-app-e155b",
-            storageBucket: "sample-firebase-ai-app-e155b.firebasestorage.app",
-            messagingSenderId: "189674121794",
-            appId: "1:189674121794:web:966c180bc848567a0e9bdb",
-            measurementId: "G-2CPPLS5M5J"
+        // Your web app's Firebase configuration (Updated)
+        const firebaseConfig = {
+            apiKey: "AIzaSyBygYzybD9J1chLVpvOEV-IdssCqLkNPW8",
+            authDomain: "demand-supply-2bc80.firebaseapp.com",
+            databaseURL: "https://demand-supply-2bc80-default-rtdb.firebaseio.com",
+            projectId: "demand-supply-2bc80",
+            storageBucket: "demand-supply-2bc80.firebasestorage.app",
+            messagingSenderId: "930703966036",
+            appId: "1:930703966036:web:74963f3adfeb40ca6d92c1"
         };
 
         // Initialize Firebase
@@ -43,96 +43,72 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
         
-        // App ID for data isolation
-        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'chahida-jogan-store';
-
-        // System User (For Permission)
-        let systemUser = null;
-        // Virtual User (For UI Display)
-        let virtualUser = null;
-
-        // --- AUTH INITIALIZATION ---
-        // This connects to Firebase invisibly to allow database writes
-        const initAuth = async () => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                console.error("Auth Error:", error);
-                await signInAnonymously(auth);
-            }
-        };
-        initAuth();
-
-        // Track System Auth State
-        onAuthStateChanged(auth, (user) => {
-            systemUser = user;
-            // Check for persistent virtual login
-            const savedUser = localStorage.getItem('virtualUser');
-            if (savedUser) {
-                virtualUser = JSON.parse(savedUser);
-                updateAuthUI(virtualUser);
-            }
-        });
-
         // --- GLOBAL FUNCTIONS ---
 
-        // Virtual Login Logic (Simulated)
+        // Real Login Logic
         window.loginUser = async (email, password) => {
-            // Simulate login process
-            setTimeout(() => {
-                const userObj = { email: email, name: email.split('@')[0] };
-                virtualUser = userObj;
-                localStorage.setItem('virtualUser', JSON.stringify(userObj));
-                
+            try {
+                const userCredential = await signInWithEmailAndPassword(auth, email, password);
                 showToast("সফলভাবে লগইন হয়েছে!");
                 toggleModal('authModal');
-                updateAuthUI(virtualUser);
-            }, 800);
+            } catch (error) {
+                console.error("Login Error:", error);
+                let msg = "লগইন ব্যর্থ হয়েছে";
+                if(error.code === 'auth/user-not-found') msg = "এই ইমেইলে কোনো একাউন্ট নেই";
+                else if(error.code === 'auth/wrong-password') msg = "ভুল পাসওয়ার্ড";
+                showToast(msg, true);
+            }
         };
 
-        // Virtual Register Logic (Simulated)
+        // Real Register Logic
         window.registerUser = async (email, password) => {
-            // Simulate registration by logging in
-            window.loginUser(email, password); 
-            showToast("রেজিস্ট্রেশন সফল হয়েছে!");
+            try {
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                showToast("রেজিস্ট্রেশন সফল হয়েছে!");
+                toggleModal('authModal');
+            } catch (error) {
+                console.error("Register Error:", error);
+                let msg = "রেজিস্ট্রেশন ব্যর্থ হয়েছে";
+                if(error.code === 'auth/email-already-in-use') msg = "এই ইমেইলটি ইতিমধ্যে ব্যবহৃত হচ্ছে";
+                showToast(msg, true);
+            }
         };
 
-        window.logoutUser = () => {
-            virtualUser = null;
-            localStorage.removeItem('virtualUser');
-            showToast("লগআউট সম্পন্ন হয়েছে");
-            updateAuthUI(null);
-            document.getElementById('dashboardOrders').innerHTML = '';
+        // Real Logout Logic
+        window.logoutUser = async () => {
+            try {
+                await signOut(auth);
+                showToast("লগআউট সম্পন্ন হয়েছে");
+                document.getElementById('dashboardOrders').innerHTML = '';
+            } catch (error) {
+                console.error(error);
+            }
         };
+
+        // Track Auth State
+        onAuthStateChanged(auth, (user) => {
+            updateAuthUI(user);
+        });
 
         // Place Order Function
         window.placeOrder = async (orderDetails) => {
-            // 1. Check Virtual Auth (UI)
-            if (!virtualUser) {
+            const user = auth.currentUser;
+            
+            if (!user) {
                 showToast("অর্ডার করতে হলে আপনাকে লগইন থাকতে হবে!", true);
                 toggleModal('checkoutModal');
                 toggleModal('authModal');
                 return;
             }
-
-            // 2. Check System Auth (Database Permission)
-            if (!systemUser) {
-                showToast("সিস্টেম কানেকশন সমস্যা। দয়া করে পেজটি রিফ্রেশ দিন।", true);
-                return;
-            }
             
             try {
-                // NOTE: If you move to your own Firebase project, change this line to:
-                // const ordersRef = collection(db, 'orders');
+                // Using 'orders' collection in your project
                 const ordersRef = collection(db, 'orders');
                 
                 await addDoc(ordersRef, {
                     ...orderDetails,
-                    accountEmail: virtualUser.email, // Link order to virtual user
+                    userId: user.uid,
+                    userEmail: user.email,
                     status: 'Pending',
                     createdAt: serverTimestamp(),
                     date: new Date().toLocaleDateString('bn-BD')
@@ -143,20 +119,22 @@
                 window.clearCart(); 
             } catch (error) {
                 console.error("Error placing order: ", error);
-                showToast("অর্ডার করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।", true);
+                showToast("অর্ডার করতে সমস্যা হয়েছে: " + error.message, true);
             }
         };
 
         // Fetch Orders Function
         window.fetchOrders = async () => {
-            if (!systemUser || !virtualUser) return;
+            const user = auth.currentUser;
+            if (!user) return;
+            
             const ordersContainer = document.getElementById('dashboardOrders');
             ordersContainer.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-blue-400"></i> লোড হচ্ছে...</div>';
 
             try {
-                // NOTE: If you move to your own Firebase project, change this line to:
-                // const ordersRef = collection(db, 'orders');
                 const ordersRef = collection(db, 'orders');
+                // Fetch all orders and filter client-side (simplest for no-index setup)
+                // Or you can use query(ordersRef, where("userId", "==", user.uid)); if you create index
                 
                 const querySnapshot = await getDocs(ordersRef);
 
@@ -165,12 +143,10 @@
                     return;
                 }
 
-                // Filter in memory for the current virtual user
                 let orders = [];
                 querySnapshot.forEach((doc) => {
                     const data = doc.data();
-                    // Only show orders belonging to the logged-in virtual email
-                    if (data.accountEmail === virtualUser.email) {
+                    if (data.userId === user.uid) {
                         orders.push({ id: doc.id, ...data });
                     }
                 });
@@ -225,7 +201,7 @@
             if (user) {
                 loginBtn.classList.add('hidden');
                 logoutBtn.classList.remove('hidden');
-                userName.innerHTML = `<i class="fas fa-user-circle mr-1"></i> ${user.email.split('@')[0]}`;
+                userName.innerHTML = `<i class="fas fa-user-circle mr-1"></i> ${user.email ? user.email.split('@')[0] : 'User'}`;
                 userName.classList.remove('hidden');
                 userName.onclick = () => {
                     toggleModal('dashboardModal');

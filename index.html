@@ -128,7 +128,7 @@
             try {
                 // NOTE: If you move to your own Firebase project, change this line to:
                 // const ordersRef = collection(db, 'orders');
-                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', systemUser.uid, 'orders');
+                const ordersRef = collection(db, 'orders');
                 
                 await addDoc(ordersRef, {
                     ...orderDetails,
@@ -156,7 +156,7 @@
             try {
                 // NOTE: If you move to your own Firebase project, change this line to:
                 // const ordersRef = collection(db, 'orders');
-                const ordersRef = collection(db, 'artifacts', APP_ID, 'users', systemUser.uid, 'orders');
+                const ordersRef = collection(db, 'orders');
                 
                 const querySnapshot = await getDocs(ordersRef);
 
